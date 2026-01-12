@@ -12,13 +12,13 @@ import platform
 
 # --- KONFIGURATION ---
 DB_NAME = "Aktdoclix.db"
-BACKUP_NAME = "archiv_v46_sicherung.db"
+BACKUP_NAME = "archiv_backup_v59.db"
 SETTINGS_FILE = "settings.json"
 
 class ArchivApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Aktdoclix")
+        self.root.title("Aktdoclix - Universal Version")
 
         # --- SYSTEM INITIALISIERUNG ---
         self.init_system()
@@ -50,20 +50,22 @@ class ArchivApp:
 
         # --- EINSTELLUNGEN LADEN ---
         self.settings = self.load_settings()
-        self.custom_history = self.settings["custom_btn_history"]
-        self.custom_btn_text = self.custom_history[0] if self.custom_history else "Kassentagebuch"
-        self.lagerorte = self.settings["lagerorte"]
-        self.kat_map = self.settings["kategorien"]
-
-        # --- LOGIK ---
-        self.titel_logik = {
-            "Gemeinde": "Gemeinderechnung Oberschwaningen",
-            "Kirche": "Kirchenrechnung Oberschwaningen",
-            "Schule": "Schulrechnung Oberschwaningen",
-            "Armenpflege": "Armenpflegerechnung Oberschwaningen",
-            "Sonderakten": "Rechnung (Sonderakte)"
-        }
         
+        # Listen und Maps
+        self.custom_history = self.settings.get("custom_btn_history", [])
+        self.custom_btn_text = self.custom_history[0] if self.custom_history else "Freitext"
+        self.lagerorte = self.settings.get("lagerorte", [])
+        self.kat_map = self.settings.get("kategorien", {"Allgemein": "Allg."})
+        self.types = self.settings.get("types", ["Einzelheft", "Buch", "Sammelband", "Ordner", "Karten und Pläne", "Urkunden"])
+        self.conditions = self.settings.get("conditions", ["Stabil", "Leicht beschädigt", "Stark beschädigt", "Nicht benutzbar"])
+
+        # Turbo Button Konfiguration
+        self.turbo_conf = self.settings.get("turbo_buttons", [
+            {"label": "RECHNUNG", "prefix": "", "color": "#4caf50", "link_to": 0},
+            {"label": "BELEGE", "prefix": "Belege zur", "color": "#00897b", "link_to": 1},
+            {"label": "DUPLIKAT", "prefix": "Duplikat zur", "color": "#795548", "link_to": 1}
+        ])
+
         # Timer Variable für die Suche
         self.search_timer = None
 
@@ -97,6 +99,43 @@ class ArchivApp:
             messagebox.showerror("Datenbankfehler", f"SQL Fehler: {e}")
             return [] if fetch else None
 
+    # --- EINSTELLUNGEN MANAGEMENT (Neutralisiert) ---
+    def load_settings(self):
+        defaults = {
+            "custom_btn_history": ["Kassentagebuch", "Tagebuch"],
+            "lagerorte": ["Archivraum 1", "Schrank A", "Regal 1"],
+            "kategorien": {"Gemeinde": "Gem.", "Kirche": "Kirch.", "Schule": "Schul.", "Allgemein": "Allg."},
+            "types": ["Einzelheft", "Buch", "Sammelband", "Ordner", "Karten und Pläne", "Urkunden"],
+            "conditions": ["Stabil", "Leicht beschädigt", "Stark beschädigt", "Nicht benutzbar"],
+            # link_to: 0 = Eigenständig (Master), 1 = Button 1, 2 = Button 2
+            "turbo_buttons": [
+                {"label": "RECHNUNG", "prefix": "", "color": "#4caf50", "link_to": 0},
+                {"label": "BELEGE", "prefix": "Belege zur", "color": "#00897b", "link_to": 1},
+                {"label": "DUPLIKAT", "prefix": "Duplikat zur", "color": "#795548", "link_to": 1}
+            ]
+        }
+        if os.path.exists(self.settings_path):
+            try:
+                with open(self.settings_path, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                    return {**defaults, **loaded}
+            except: pass
+        return defaults
+
+    def save_settings(self):
+        try:
+            with open(self.settings_path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "custom_btn_history": self.custom_history,
+                    "lagerorte": self.lagerorte,
+                    "kategorien": self.kat_map,
+                    "types": self.types,
+                    "conditions": self.conditions,
+                    "turbo_buttons": self.turbo_conf
+                }, f, indent=4, ensure_ascii=False)
+        except Exception as e: print(f"Settings Fehler: {e}")
+
+    # --- UI SETUP ---
     def setup_ui(self):
         # --- TURBO LEISTE ---
         self.turbo_frame = tk.Frame(self.root, bg="#e3f2fd", pady=10)
@@ -104,13 +143,29 @@ class ArchivApp:
         
         tk.Label(self.turbo_frame, text="SCHNELL-EINGABE:", bg="#e3f2fd", font=("Arial", 10, "bold")).pack(side=tk.LEFT, padx=10)
         
-        self.create_turbo_btn(self.turbo_frame, "RECHNUNG", "#4caf50", self.click_rechnung)
-        self.create_turbo_btn(self.turbo_frame, "BELEGE", "#00897b", self.click_beleg)
+        # DYNAMISCHE BUTTONS
+        self.btn_turbo_1 = self.create_turbo_btn(self.turbo_frame, 
+                                                 self.turbo_conf[0]["label"], 
+                                                 self.turbo_conf[0]["color"], 
+                                                 lambda: self.click_dynamic_turbo(0))
+        self.btn_turbo_1.bind("<Button-3>", lambda e: self.edit_turbo_button(0))
+
+        self.btn_turbo_2 = self.create_turbo_btn(self.turbo_frame, 
+                                                 self.turbo_conf[1]["label"], 
+                                                 self.turbo_conf[1]["color"], 
+                                                 lambda: self.click_dynamic_turbo(1))
+        self.btn_turbo_2.bind("<Button-3>", lambda e: self.edit_turbo_button(1))
         
+        # Custom Button (Freitext)
         self.btn_custom = self.create_turbo_btn(self.turbo_frame, self.custom_btn_text, "#b3e5fc", self.click_custom, fg="black")
         self.btn_custom.bind("<Button-3>", self.open_custom_menu) 
 
-        self.create_turbo_btn(self.turbo_frame, "DUPLIKAT", "#795548", self.click_duplikat)
+        # Dritter dynamischer Button
+        self.btn_turbo_3 = self.create_turbo_btn(self.turbo_frame, 
+                                                 self.turbo_conf[2]["label"], 
+                                                 self.turbo_conf[2]["color"], 
+                                                 lambda: self.click_dynamic_turbo(2))
+        self.btn_turbo_3.bind("<Button-3>", lambda e: self.edit_turbo_button(2))
 
         # Jalousie-Button
         self.btn_toggle = tk.Button(self.turbo_frame, text="🔼 Maske ausblenden", 
@@ -128,11 +183,12 @@ class ArchivApp:
         # Zeile 0
         tk.Label(self.input_frame, text="Kategorie:").grid(row=0, column=0, sticky="w")
         self.combo_kat = ttk.Combobox(self.input_frame, values=list(self.kat_map.keys()), width=30)
-        self.combo_kat.current(0)
+        if list(self.kat_map.keys()): self.combo_kat.current(0)
         self.combo_kat.grid(row=0, column=1, sticky="w", padx=5)
         self.combo_kat.bind("<KeyRelease>", self.on_kat_type_live) 
         self.combo_kat.bind("<<ComboboxSelected>>", self.on_kat_change)
         self.combo_kat.bind("<Return>", lambda e: self.ent_titel.focus_set())
+        self.combo_kat.bind("<Button-3>", lambda e: self.show_combo_context_menu(e, self.combo_kat, "kategorien"))
 
         tk.Label(self.input_frame, text="Signatur:").grid(row=0, column=2, sticky="w", padx=(10, 2))
         self.ent_sig = tk.Entry(self.input_frame, width=20)
@@ -155,29 +211,30 @@ class ArchivApp:
         art_frame = tk.Frame(self.input_frame)
         art_frame.grid(row=2, column=1, sticky="w", padx=5)
         
-        self.combo_typ = ttk.Combobox(art_frame, values=["Einzelheft", "Buch", "Sammelband", "Ordner", "Karten und Pläne", "Urkunden"], state="readonly", width=15)
+        self.combo_typ = ttk.Combobox(art_frame, values=self.types, width=15)
         self.combo_typ.set("Einzelheft")
         self.combo_typ.pack(side=tk.LEFT)
         self.combo_typ.bind("<<ComboboxSelected>>", self.toggle_fields)
         self.combo_typ.bind("<Return>", self.on_typ_enter)
+        self.combo_typ.bind("<Button-3>", lambda e: self.show_combo_context_menu(e, self.combo_typ, "types"))
 
         self.lbl_anzahl = tk.Label(art_frame, text="Anzahl:")
         self.ent_anzahl = tk.Entry(art_frame, width=5)
         self.ent_anzahl.bind("<Return>", lambda e: self.combo_zustand.focus_set())
 
         tk.Label(self.input_frame, text="Zustand:").grid(row=2, column=2, sticky="w", padx=(10, 2))
-        self.combo_zustand = ttk.Combobox(self.input_frame, 
-                                          values=["Stabil", "Leicht beschädigt", "Stark beschädigt", "Nicht benutzbar"], 
-                                          state="readonly", width=20)
+        self.combo_zustand = ttk.Combobox(self.input_frame, values=self.conditions, width=20)
         self.combo_zustand.set("Stabil")
         self.combo_zustand.grid(row=2, column=3, sticky="w")
         self.combo_zustand.bind("<Return>", lambda e: self.combo_lager.focus_set())
+        self.combo_zustand.bind("<Button-3>", lambda e: self.show_combo_context_menu(e, self.combo_zustand, "conditions"))
 
         # Zeile 3
         tk.Label(self.input_frame, text="Lagerort:").grid(row=3, column=0, sticky="w")
         self.combo_lager = ttk.Combobox(self.input_frame, values=self.lagerorte, width=30)
         self.combo_lager.grid(row=3, column=1, sticky="w", padx=5, pady=5)
         self.combo_lager.bind("<Return>", self.on_lager_enter)
+        self.combo_lager.bind("<Button-3>", lambda e: self.show_combo_context_menu(e, self.combo_lager, "lagerorte"))
 
         self.lbl_sonder = tk.Label(self.input_frame, text="Unterkategorie:")
         self.sonder_themen = ["Infrastruktur", "Militär & Krieg", "Flurbereinigung", "Verwaltung", "Wirtschaft", "Justiz", "Sonstiges"]
@@ -230,14 +287,13 @@ class ArchivApp:
         list_frame = tk.Frame(self.root)
         list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
-        # NEUE SPALTE: "Scan"
         cols = ("ID", "Signatur", "Titel", "Zeit", "Lagerort", "Zustand", "Scan")
         self.tree = ttk.Treeview(list_frame, columns=cols, show='headings')
         
         vsb = ttk.Scrollbar(list_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=vsb.set)
         
-        # Spaltenkonfiguration (Breiten angepasst)
+        # Spaltenkonfiguration
         widths = [30, 110, 300, 80, 150, 120, 50]
         for col, w in zip(cols, widths):
             self.tree.heading(col, text=col)
@@ -282,34 +338,7 @@ class ArchivApp:
         except Exception as e:
             messagebox.showerror("Fehler", f"Konnte Ordner nicht öffnen: {e}")
 
-    # --- SETTINGS MANAGEMENT ---
-    def load_settings(self):
-        defaults = {
-            "custom_btn_history": ["Kassentagebuch", "Tagebuch", "Planungsbuch"],
-            "lagerorte": ["Staatsarchiv Nürnberg", "Gemeindearchiv Unterschwaningen", "Schlossarchiv Dennenlohe", "Ortsarchiv Oberschwaningen"],
-            "kategorien": {
-                "Gemeinde": "Ge.Obs.", "Kirche": "Ki.Obs.", "Schule": "Schul.Obs.", 
-                "Armenpflege": "Armenpf.Obs.", "Sonderakten": "Sonder."
-            }
-        }
-        if os.path.exists(self.settings_path):
-            try:
-                with open(self.settings_path, "r", encoding="utf-8") as f:
-                    return {**defaults, **json.load(f)}
-            except: pass
-        return defaults
-
-    def save_settings(self):
-        try:
-            with open(self.settings_path, "w", encoding="utf-8") as f:
-                json.dump({
-                    "custom_btn_history": self.custom_history,
-                    "lagerorte": self.lagerorte,
-                    "kategorien": self.kat_map
-                }, f, indent=4, ensure_ascii=False)
-        except Exception as e: print(f"Settings Fehler: {e}")
-
-    # --- BUTTON LOGIK ---
+    # --- BUTTON LOGIK (MASTER/SKLAVE & FREITEXT) ---
     def open_custom_menu(self, event):
         win = tk.Toplevel(self.root)
         win.title("Begriff wählen")
@@ -333,22 +362,107 @@ class ArchivApp:
         win.bind('<Return>', confirm); cb.bind('<Return>', confirm)
 
     def click_custom(self): self.turbo_logic(self.custom_btn_text)
-    def click_rechnung(self): self.turbo_logic("Rechnung")
-    def click_beleg(self): self.turbo_logic("Belege", prefix="Belege zur")
-    def click_duplikat(self): self.turbo_logic("Duplikat", prefix="Duplikat zur")
+
+    # --- DYNAMISCHE BUTTONS LOGIK ---
+    def click_dynamic_turbo(self, index):
+        """Klick-Event für die 3 Buttons"""
+        conf = self.turbo_conf[index]
+        link_target = conf.get("link_to", 0) 
+        
+        # Sklaven-Logik: Hole das Label vom Master-Button
+        if link_target > 0 and link_target <= len(self.turbo_conf) and link_target != (index + 1):
+            master_conf = self.turbo_conf[link_target - 1]
+            master_label = master_conf["label"].title()
+            # Der Sklave nutzt das Master-Label, aber sein eigenes Prefix
+            self.turbo_logic(master_label, prefix=conf["prefix"])
+        else:
+            # Eigenständiger Button
+            my_label = conf["label"].title()
+            self.turbo_logic(my_label, prefix=conf["prefix"])
+
+    def edit_turbo_button(self, index):
+        """Öffnet das Konfigurations-Fenster für den Button (Rechtsklick)"""
+        conf = self.turbo_conf[index]
+        
+        # Fenster erstellen
+        win = tk.Toplevel(self.root)
+        win.title(f"Button {index+1} konfigurieren")
+        win.geometry("400x200")
+        
+        # 1. Beschriftung (Hauptwort)
+        tk.Label(win, text="Hauptwort (Label):", font=("Arial", 10)).grid(row=0, column=0, sticky="w", padx=15, pady=10)
+        ent_label = tk.Entry(win, width=25, font=("Arial", 10))
+        ent_label.insert(0, conf["label"])
+        ent_label.grid(row=0, column=1, padx=10, pady=10)
+        
+        # 2. Prefix
+        tk.Label(win, text="Prefix (Davor):", font=("Arial", 10)).grid(row=1, column=0, sticky="w", padx=15, pady=5)
+        ent_prefix = tk.Entry(win, width=25, font=("Arial", 10))
+        ent_prefix.insert(0, conf["prefix"])
+        ent_prefix.grid(row=1, column=1, padx=10, pady=5)
+        
+        # 3. Verknüpfung (Modus)
+        tk.Label(win, text="Wichtigkeit (Modus):", font=("Arial", 10)).grid(row=2, column=0, sticky="w", padx=15, pady=10)
+        
+        options = ["Eigenständig (Master)"]
+        if index > 0: options.append("Sklave von Button 1")
+        if index > 1: options.append("Sklave von Button 2")
+             
+        cb_mode = ttk.Combobox(win, values=options, state="readonly", width=23, font=("Arial", 10))
+        
+        # Aktuellen Wert setzen
+        current_link = conf.get("link_to", 0)
+        if current_link == 0:
+            cb_mode.current(0)
+        elif current_link == 1 and index > 0:
+            cb_mode.set("Sklave von Button 1")
+        elif current_link == 2 and index > 1:
+            cb_mode.set("Sklave von Button 2")
+        else:
+            cb_mode.current(0)
+            
+        cb_mode.grid(row=2, column=1, padx=10, pady=10)
+        
+        def save_btn_config():
+            new_lbl = ent_label.get().strip().upper()
+            new_pre = ent_prefix.get().strip()
+            mode_str = cb_mode.get()
+            
+            # Link ID ermitteln
+            new_link = 0
+            if "Button 1" in mode_str: new_link = 1
+            elif "Button 2" in mode_str: new_link = 2
+            
+            # Speichern
+            self.turbo_conf[index]["label"] = new_lbl
+            self.turbo_conf[index]["prefix"] = new_pre
+            self.turbo_conf[index]["link_to"] = new_link
+            self.save_settings()
+            
+            # UI Button Text updaten
+            btn_ref = [self.btn_turbo_1, self.btn_turbo_2, self.btn_turbo_3][index]
+            btn_ref.config(text=new_lbl)
+            
+            win.destroy()
+            messagebox.showinfo("Gespeichert", f"Button {index+1} wurde aktualisiert.")
+            
+        tk.Button(win, text="💾 Speichern", bg="#4caf50", fg="white", font=("Arial", 10, "bold"), command=save_btn_config).grid(row=3, column=0, columnspan=2, pady=15)
 
     def turbo_logic(self, type_key, prefix=None):
         kat = self.combo_kat.get()
-        base = self.titel_logik.get(kat, "Rechnung")
-        if prefix:
-             parts = base.split(" ")
-             titel = f"{prefix} {parts[0]}"
-        elif type_key == self.custom_btn_text:
-             parts = base.split(" ")
-             ort = parts[-1] if len(parts) > 1 else ""
-             titel = f"{type_key} {ort}".strip()
-        else:
-             titel = base
+        
+        parts = []
+        if prefix: parts.append(prefix)
+        # Kategorie (falls nicht Allgemein)
+        if kat and kat != "Allgemein" and kat not in self.kat_map: 
+             pass # Optional: Hier könnte man die Kategorie in den Titel aufnehmen
+
+        parts.append(type_key)
+        
+        # Titel zusammensetzen
+        titel = " ".join(parts)
+        titel = " ".join(titel.split()) # Doppelte Leerzeichen entfernen
+        
         self.turbo_fill(titel)
 
     def turbo_fill(self, titel):
@@ -357,7 +471,57 @@ class ArchivApp:
         self.ent_zeit.focus_set()
         self.ent_zeit.select_range(0, tk.END)
 
-    # --- UI INTERAKTION ---
+    # --- UI INTERAKTION & KONTEXT MENÜS ---
+    def show_combo_context_menu(self, event, combobox, setting_key):
+        current_val = combobox.get()
+        if not current_val: return
+
+        menu = tk.Menu(self.root, tearoff=0)
+        menu.add_command(label=f"✏️ '{current_val}' korrigieren/umbenennen", 
+                        command=lambda: self.edit_combo_entry(combobox, setting_key, current_val))
+        menu.add_command(label=f"🗑️ '{current_val}' aus Liste löschen", 
+                        command=lambda: self.delete_combo_entry(combobox, setting_key, current_val))
+        menu.post(event.x_root, event.y_root)
+
+    def delete_combo_entry(self, combobox, setting_key, val):
+        if not messagebox.askyesno("Löschen", f"Soll '{val}' wirklich aus der Vorschlagsliste entfernt werden?"): return
+        
+        if setting_key in ["types", "conditions", "lagerorte"]:
+            target_list = getattr(self, setting_key)
+            if val in target_list:
+                target_list.remove(val)
+                combobox['values'] = target_list
+                combobox.set("")
+                self.save_settings()
+        elif setting_key == "kategorien":
+            if val in self.kat_map:
+                del self.kat_map[val]
+                combobox['values'] = list(self.kat_map.keys())
+                combobox.set("")
+                self.save_settings()
+
+    def edit_combo_entry(self, combobox, setting_key, old_val):
+        new_val = simpledialog.askstring("Korrigieren", f"Neuer Name für '{old_val}':", initialvalue=old_val)
+        if not new_val or new_val == old_val: return
+
+        if setting_key in ["types", "conditions", "lagerorte"]:
+            target_list = getattr(self, setting_key)
+            if old_val in target_list:
+                idx = target_list.index(old_val)
+                target_list[idx] = new_val
+                combobox['values'] = target_list
+                combobox.set(new_val)
+                self.save_settings()
+        elif setting_key == "kategorien":
+            if old_val in self.kat_map:
+                prefix = self.kat_map[old_val]
+                del self.kat_map[old_val]
+                self.kat_map[new_val] = prefix
+                combobox['values'] = list(self.kat_map.keys())
+                combobox.set(new_val)
+                self.save_settings()
+
+    # --- INPUT EVENT HANDLER ---
     def on_lager_enter(self, event):
         if self.combo_sonder.winfo_viewable(): self.combo_sonder.focus_set()
         else: self.txt_notizen.focus_set()
@@ -386,7 +550,8 @@ class ArchivApp:
         else:
             self.lbl_anzahl.pack_forget(); self.ent_anzahl.pack_forget()
         
-        if self.combo_kat.get() == "Sonderakten":
+        # Logik für Sonderakten-Unterkategorie
+        if "sonder" in self.combo_kat.get().lower():
             self.lbl_sonder.grid(row=3, column=2, sticky="w", padx=(10, 2))
             self.combo_sonder.grid(row=3, column=3, sticky="w", padx=2)
         else:
@@ -426,7 +591,6 @@ class ArchivApp:
         self.tree.selection_set(item)
         menu = tk.Menu(self.root, tearoff=0)
         
-        # Rechtsklick: Nur noch Ordner & Kopieren
         menu.add_command(label="📂 Ordner öffnen", command=self.open_folder_from_list)
         menu.add_command(label="📋 Signatur kopieren", command=self.copy_sig_to_clipboard)
         
@@ -449,7 +613,6 @@ class ArchivApp:
             self.root.clipboard_clear(); self.root.clipboard_append(sig)
 
     def on_double_click(self, event):
-        # LINKS-KLICK (Doppel) öffnet IMMER die gesperrte Detailansicht
         self.open_edit_window(None)
 
     def browse_folder(self):
@@ -462,13 +625,19 @@ class ArchivApp:
         titel = self.ent_titel.get().strip()
         kat_input = self.combo_kat.get().strip()
         lager_input = self.combo_lager.get().strip()
+        typ_input = self.combo_typ.get().strip()
+        zustand_input = self.combo_zustand.get().strip()
 
         if not sig or not titel: return messagebox.showwarning("Fehler", "Signatur und Titel sind Pflichtfelder!")
         
+        # Dynamic Learning
+        has_changes = False
         if lager_input and lager_input not in self.lagerorte:
-            self.lagerorte.append(lager_input)
-            self.combo_lager['values'] = self.lagerorte
-            self.save_settings()
+            self.lagerorte.append(lager_input); self.combo_lager['values'] = self.lagerorte; has_changes = True
+        if typ_input and typ_input not in self.types:
+            self.types.append(typ_input); self.combo_typ['values'] = self.types; has_changes = True
+        if zustand_input and zustand_input not in self.conditions:
+            self.conditions.append(zustand_input); self.combo_zustand['values'] = self.conditions; has_changes = True
 
         if kat_input and kat_input not in self.kat_map:
             suggestion = kat_input[:3] + "."
@@ -476,12 +645,14 @@ class ArchivApp:
             prefix = new_prefix.strip() if new_prefix else suggestion
             self.kat_map[kat_input] = prefix
             self.combo_kat['values'] = list(self.kat_map.keys())
-            self.save_settings()
+            has_changes = True
             
             match = re.search(r'(\d+)$', sig)
             if match:
                 sig = f"{prefix}{match.group(1)}"
                 self.ent_sig.delete(0, tk.END); self.ent_sig.insert(0, sig)
+
+        if has_changes: self.save_settings()
 
         new_folder_path = os.path.join(self.base_path, sig)
         if not os.path.exists(new_folder_path):
@@ -500,11 +671,10 @@ class ArchivApp:
 
         sql = '''INSERT INTO akten (signatur, titel, zeitraum, typ, anzahl, kategorie, unterkat, zustand, schlagworte, notizen, pfad, lagerort) 
                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?)'''
-        params = (sig, titel, self.ent_zeit.get(), self.combo_typ.get(), self.ent_anzahl.get() or 1, 
-                  kat_input, self.combo_sonder.get(), self.combo_zustand.get(), "", notiz, self.ent_pfad.get(), lager_input)
+        params = (sig, titel, self.ent_zeit.get(), typ_input, self.ent_anzahl.get() or 1, 
+                  kat_input, self.combo_sonder.get(), zustand_input, "", notiz, self.ent_pfad.get(), lager_input)
         
         self.run_query(sql, params)
-        
         self.on_kat_change(None)
         
         if self.var_clear_fields.get():
@@ -518,7 +688,7 @@ class ArchivApp:
         self.load_data()
         self.lbl_status.config(text=f"Gespeichert: {sig}", fg="green")
 
-    # --- VERBESSERTE SUCHE ---
+    # --- SUCHE ---
     def start_search_timer(self, event):
         if self.search_timer:
             self.root.after_cancel(self.search_timer)
@@ -545,8 +715,7 @@ class ArchivApp:
             wildcard = f"%{term}%"
             params = [wildcard] * 8
         
-        # --- UPDATE: SORTIERUNG UMGEDREHT ---
-        sql += " ORDER BY id DESC"
+        sql += " ORDER BY id DESC" 
 
         rows = self.run_query(sql, params, fetch=True)
         
@@ -561,20 +730,15 @@ class ArchivApp:
             
             disp_zustand = f"{'🔴' if tag=='kritisch' else '🟡' if tag=='warnung' else '🟢'} {zustand}"
             
-            # --- DATEI CHECK LOGIK ---
+            # Scan Status
             scan_status = "⚠️"
             if pfad and os.path.exists(pfad):
                 try:
-                    # Prüfen ob Dateien drin sind (versteckte Dateien werden ignoriert)
                     files = [f for f in os.listdir(pfad) if not f.startswith('.')]
-                    if len(files) > 0:
-                        scan_status = "✅" # Voll
-                    else:
-                        scan_status = "⚪" # Leer
-                except:
-                    scan_status = "❓" # Fehler beim Zugriff
+                    if len(files) > 0: scan_status = "✅" 
+                    else: scan_status = "⚪" 
+                except: scan_status = "❓" 
             
-            # Werte in Tree einfügen (NEU: scan_status am Ende)
             self.tree.insert("", tk.END, values=(row[0], row[1], row[2], row[3], row[10], disp_zustand, scan_status), tags=(tag,))
 
     def open_export_window(self):
@@ -613,10 +777,9 @@ class ArchivApp:
 
         tk.Button(exp_win, text="Export Starten", bg="#ff9800", command=go).pack(pady=15)
 
-    # --- EDIT WINDOW (MIT SICHERHEITS-MODUS & NAVIGATIONS-SPRUNG & INTELLIGENTER SUCHE) ---
+    # --- EDIT WINDOW (SICHERHEITS-MODUS) ---
     def open_edit_window(self, event, specific_id=None):
-        if specific_id:
-            iid = specific_id
+        if specific_id: iid = specific_id
         else:
             item = self.tree.selection()
             if not item: return
@@ -642,7 +805,7 @@ class ArchivApp:
             e = tk.Entry(ew)
             e.insert(0, val if val else "")
             e.grid(row=idx, column=1, sticky="ew", padx=10)
-            input_widgets.append(e) # Merken
+            input_widgets.append(e) 
             return e
 
         fields['id'] = mk_row(0, "ID:", str(row[0]))
@@ -654,19 +817,19 @@ class ArchivApp:
         fields['lager'] = ttk.Combobox(ew, values=self.lagerorte)
         fields['lager'].set(row[12] if len(row)>12 and row[12] else "")
         fields['lager'].grid(row=4, column=1, sticky="ew", padx=10)
-        input_widgets.append(fields['lager']) # Merken
+        input_widgets.append(fields['lager']) 
         
         tk.Label(ew, text="Unterkategorie:").grid(row=5, column=0, sticky="e")
         fields['sub'] = ttk.Combobox(ew, values=self.sonder_themen)
         fields['sub'].set(row[7] if row[7] else "")
         fields['sub'].grid(row=5, column=1, sticky="ew", padx=10)
-        input_widgets.append(fields['sub']) # Merken
+        input_widgets.append(fields['sub'])
 
         tk.Label(ew, text="Zustand:").grid(row=6, column=0, sticky="e")
-        fields['zustand'] = ttk.Combobox(ew, values=["Stabil", "Leicht beschädigt", "Stark beschädigt", "Nicht benutzbar"])
+        fields['zustand'] = ttk.Combobox(ew, values=self.conditions)
         fields['zustand'].set(row[8] if row[8] else "")
         fields['zustand'].grid(row=6, column=1, sticky="ew", padx=10)
-        input_widgets.append(fields['zustand']) # Merken
+        input_widgets.append(fields['zustand'])
 
         fields['anz'] = mk_row(7, "Anzahl:", str(row[5] or 1))
 
@@ -674,11 +837,10 @@ class ArchivApp:
         fields['notiz'] = tk.Text(ew, height=5)
         fields['notiz'].insert("1.0", row[10] if row[10] else "")
         fields['notiz'].grid(row=8, column=1, sticky="ew", padx=10)
-        # Hinweis: Textfeld wird separat gesperrt
 
         fields['pfad'] = mk_row(9, "Pfad:", row[11])
 
-        # --- ÄHNLICHE AKTEN ANZEIGE (INTERAKTIV & SCHLAU) ---
+        # --- ÄHNLICHE AKTEN (±5 Jahre) ---
         tk.Label(ew, text="🔗 Ähnliche Akten (±5 Jahre vom Startjahr):", font=("Arial", 10, "bold"), fg="#1565c0").grid(row=10, column=0, columnspan=2, pady=(20, 5), sticky="w", padx=10)
         rel_frame = tk.Frame(ew)
         rel_frame.grid(row=11, column=0, columnspan=2, sticky="nsew", padx=10, pady=5)
@@ -700,32 +862,24 @@ class ArchivApp:
 
         rel_list.bind("<Double-1>", on_related_double_click)
 
-        # HELFER: Erstes Jahr extrahieren
         def get_start_year(text):
             match = re.search(r'\d{4}', str(text))
             if match: return int(match.group(0))
             return None
 
-        # LOGIK: +/- 5 JAHRE VOM STARTJAHR
-        my_start = get_start_year(row[3]) # row[3] ist Zeitraum
-        
+        my_start = get_start_year(row[3]) 
         if my_start:
              limit_low = my_start - 5
              limit_high = my_start + 5
-             
-             # Kandidaten holen (Gleiche Kategorie, nicht ich selbst)
              candidates = self.run_query("SELECT id, signatur, titel, zeitraum FROM akten WHERE kategorie=? AND id!=?", (row[6], iid), fetch=True)
-             
              for cand in candidates:
                  cand_start = get_start_year(cand[3])
-                 if cand_start:
-                     # Ist das Startjahr des Kandidaten im Fenster?
-                     if limit_low <= cand_start <= limit_high:
-                         rel_list.insert("", tk.END, values=(cand[0], cand[1], cand[2], cand[3]))
+                 if cand_start and limit_low <= cand_start <= limit_high:
+                     rel_list.insert("", tk.END, values=(cand[0], cand[1], cand[2], cand[3]))
         
         bf = tk.Frame(ew, pady=20); bf.grid(row=12, column=0, columnspan=2)
 
-        # --- INTERNE FUNKTIONEN ---
+        # --- INTERNE FUNKTIONEN (Save/Delete) ---
         def save():
             try: new_id = int(fields['id'].get().strip())
             except ValueError: return messagebox.showerror("Fehler", "Die ID muss eine Zahl sein!")
@@ -759,31 +913,23 @@ class ArchivApp:
                 self.run_query("DELETE FROM akten WHERE id=?", (iid,))
                 self.load_data(); ew.destroy()
 
-        # --- SICHERHEITS-LOGIK ---
+        # --- SICHERHEITS-LOGIK (Toggle Edit) ---
         def enable_edit_mode():
-            """Schaltet alle Felder frei"""
             ew.title(f"BEARBEITEN: {row[1]}")
             for w in input_widgets:
-                if isinstance(w, ttk.Combobox):
-                    w.config(state="readonly")
-                else:
-                    w.config(state="normal")
-            
+                if isinstance(w, ttk.Combobox): w.config(state="readonly")
+                else: w.config(state="normal")
             fields['notiz'].config(state="normal", bg="white")
-            
             btn_edit.pack_forget() 
             btn_save.pack(side=tk.LEFT, padx=10) 
             
-        # 1. Startzustand: ALLES GESPERRT
+        # Startzustand: ALLES GESPERRT
         for w in input_widgets:
-            if isinstance(w, ttk.Combobox):
-                w.config(state="disabled")
-            else:
-                w.config(state="readonly")
-        
+            if isinstance(w, ttk.Combobox): w.config(state="disabled")
+            else: w.config(state="readonly")
         fields['notiz'].config(state="disabled", bg="#f0f0f0")
 
-        # 2. Buttons
+        # Buttons
         btn_edit = tk.Button(bf, text="✏ Bearbeiten / Freigeben", bg="#ff9800", fg="black", font=("Arial", 10, "bold"), command=enable_edit_mode)
         btn_edit.pack(side=tk.LEFT, padx=10)
 
